@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><meta name="theme-color" content="#0A0C10">
+<title>Meus agendamentos · Agenda Barba</title>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;800&display=swap" rel="stylesheet">
+</head><body><div class="pole"></div>
+<main>
+<a href="index.html">← Início</a>
+<h1>Meus agendamentos</h1>
+<div id="cx"></div>
+<div id="lista" class="lista" style="margin-top:14px"></div>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="js/comum.js"></script>
+<script>
+async function iniciar() {
+  const { data: { session } } = await db.auth.getSession();
+  if (!session) { caixaLogin($('cx'), iniciar); $('lista').innerHTML = ''; return; }
+  $('cx').innerHTML = '';
+  $('lista').innerHTML = '<p class="carregando">Carregando...</p>';
+  const { data, error } = await db.from('agendamentos')
+    .select('id,inicio,status,barbearias(nome),servicos(nome,duracao_min,preco)')
+    .eq('cliente_id', session.user.id)
+    .order('inicio', { ascending: false });
+  if (error) { $('lista').innerHTML = '<p class="erro">Não foi possível carregar seus agendamentos.</p>'; return; }
+  if (!data.length) { $('lista').innerHTML = '<p class="muted">Você ainda não agendou nenhum horário.</p>'; return; }
+  const rotulo = { pendente: 'Pendente', confirmado: 'Confirmado', recusado: 'Recusado', cancelado: 'Cancelado' };
+  $('lista').innerHTML = data.map(a => {
+    const passou = new Date(a.inicio) < new Date();
+    const podeCancelar = !passou && ['pendente', 'confirmado'].includes(a.status);
+    return `<div class="card"><div class="row">
+      <div><b>${esc(a.barbearias?.nome)}</b>
+      <div class="muted">${esc(a.servicos?.nome)} · ${a.servicos?.duracao_min} min · ${reais(a.servicos?.preco)}<br>
+      ${new Date(a.inicio).toLocaleString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</div></div>
+      <span class="tag ${a.status === 'confirmado' ? 'on' : a.status === 'pendente' ? '' : 'off'}">${rotulo[a.status] || a.status}</span></div>
+      ${podeCancelar ? `<p style="margin-top:10px"><button data-id="${a.id}">Cancelar</button></p>` : ''}</div>`;
+  }).join('');
+}
+$('lista').addEventListener('click', async e => {
+  const b = e.target.closest('button[data-id]'); if (!b) return;
+  if (!confirm('Cancelar este agendamento?')) return;
+  b.disabled = true;
+  const { error } = await db.from('agendamentos').update({ status: 'cancelado' }).eq('id', b.dataset.id);
+  if (error) { alert('Não foi possível cancelar: ' + error.message); b.disabled = false; return; }
+  iniciar();
+});
+iniciar();
+</script>
+</body></html>

@@ -20,6 +20,7 @@
 const id = new URLSearchParams(location.search).get('id');
 let loja, servs = [], hors = [], escolha = {};
 const passo = $('passo');
+$('topo').innerHTML = '<p class="carregando">Carregando...</p>';
 
 (async () => {
   const { data } = await db.from('barbearias_publicas').select('*').eq('id', id).maybeSingle();
@@ -32,7 +33,7 @@ const passo = $('passo');
     db.from('horarios_funcionamento').select('*').eq('barbearia_id', id)]);
   servs = s.data || []; hors = h.data || [];
   $('servicos').innerHTML = servs.length ? servs.map(v => `<div class="card row">
-    <div class="row" style="justify-content:flex-start">${v.imagem_url ? `<img src="${esc(v.imagem_url)}" alt="" width="56" height="56" style="border-radius:8px;object-fit:cover">` : ''}
+    <div class="row" style="justify-content:flex-start">${v.imagem_url ? `<img src="${esc(v.imagem_url)}" alt="" width="56" height="56" loading="lazy" style="border-radius:8px;object-fit:cover">` : ''}
     <div><b>${esc(v.nome)}</b><div class="muted">${v.duracao_min} min</div></div></div><b>${reais(v.preco)}</b></div>`).join('')
     : '<p class="muted">Esta barbearia ainda não cadastrou serviços.</p>';
   passo1(); montarAval();

@@ -4,7 +4,11 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const reais = n => Number(n).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const DIAS = ['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'];
 
-document.head.insertAdjacentHTML('beforeend', `<style>
+document.head.insertAdjacentHTML('beforeend', `
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="favicon.svg">
+<link rel="manifest" href="manifest.json">
+<style>
 :root{--bg:#0A0C10;--ink:#F1F5FA;--muted:#8E9AAB;--card:#12161D;--line:#242C38;--blue:#2F7BF0;--red:#D42B35;--ok:#5FD08F;--no:#F08A8A}
 *{box-sizing:border-box}
 body{margin:0;font-family:'Bricolage Grotesque',system-ui,sans-serif;background:var(--bg);color:var(--ink);min-height:100vh}
@@ -29,7 +33,32 @@ form{display:grid;gap:10px}
 .tag.on{background:#12271C;color:var(--ok)}.tag.off{background:#2A1517;color:var(--no)}
 .erro{color:var(--no);min-height:1.2em}.ok{color:var(--ok)}
 [hidden]{display:none!important}
+.carregando{color:var(--muted);padding:14px 0}
+.toast{position:fixed;left:50%;top:14px;transform:translateX(-50%);background:var(--blue);color:#fff;padding:10px 18px;border-radius:99px;font-weight:600;z-index:50;box-shadow:0 6px 20px rgba(0,0,0,.4)}
 </style>`);
+
+// Mostra um aviso curto no topo da tela por alguns segundos.
+function avisar(texto) {
+  const t = document.createElement('div');
+  t.className = 'toast'; t.textContent = texto;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 4000);
+}
+
+// Busca as cidades de um estado na API do IBGE, guardando em cache local por 30 dias
+// (as cidades de um estado praticamente nunca mudam, então evita repetir a chamada toda hora).
+async function cidadesDoEstado(uf) {
+  const chave = 'cidades_' + uf;
+  try {
+    const salvo = JSON.parse(localStorage.getItem(chave) || 'null');
+    if (salvo && Date.now() - salvo.quando < 30 * 24 * 60 * 60 * 1000) return salvo.lista;
+  } catch (e) {}
+  const r = await fetch(`https://servicodados.ibge.gov.br/api/v1/localidades/estados/${uf}/municipios?orderBy=nome`);
+  if (!r.ok) throw new Error('Falha ao buscar cidades');
+  const lista = (await r.json()).map(m => m.nome).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  try { localStorage.setItem(chave, JSON.stringify({ quando: Date.now(), lista })); } catch (e) {}
+  return lista;
+}
 
 // Formulário de entrar / criar conta. Chama aoEntrar() quando logar.
 function caixaLogin(el, aoEntrar, permitirCadastro = true) {
@@ -39,9 +68,17 @@ function caixaLogin(el, aoEntrar, permitirCadastro = true) {
     <input id="cxS" type="password" placeholder="Senha (mínimo 6 caracteres)" autocomplete="current-password" required>
     <button class="pri" type="submit" id="cxB">Entrar</button>
     ${permitirCadastro ? '<button type="button" id="cxM">Criar conta</button>' : ''}
+    <button type="button" id="cxF" style="width:auto;background:none;border:none;color:var(--muted);text-decoration:underline;padding:4px 0">Esqueci minha senha</button>
     <div class="erro" id="cxR"></div></form>`;
   let criar = false;
   const R = $('cxR');
+  $('cxF').onclick = async () => {
+    const email = $('cxE').value.trim();
+    if (!email) { R.textContent = 'Digite seu e-mail acima e toque de novo.'; return; }
+    const { error } = await db.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname.replace(/[^/]*$/, '') + 'redefinir.html' });
+    R.className = 'erro'; R.textContent = error ? error.message : '';
+    if (!error) avisar('Enviamos um link para redefinir a senha.');
+  };
   if (permitirCadastro) $('cxM').onclick = () => {
     criar = !criar;
     $('cxN').hidden = $('cxTel').hidden = !criar;

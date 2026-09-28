@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+Disallow: /admin.html
+Disallow: /dono.html
+Disallow: /agendamentos.html
+Disallow: /redefinir.html
+
+Sitemap: /sitemap.xml

@@ -5,6 +5,10 @@
 <meta name="theme-color" content="#0A0C10">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agenda Barba</title>
+<meta name="description" content="Encontre uma barbearia perto de você e agende seu horário em poucos toques.">
+<meta property="og:title" content="Agenda Barba">
+<meta property="og:description" content="Encontre uma barbearia perto de você e agende seu horário em poucos toques.">
+<meta property="og:type" content="website">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;800&display=swap" rel="stylesheet">
@@ -43,6 +47,7 @@ a.loja:hover{border-color:var(--blue)}
     <select id="estado" aria-label="Estado"><option value="">Estado</option></select>
     <select id="cidade" aria-label="Cidade" disabled><option value="">Cidade</option></select>
   </div>
+  <input id="busca" type="search" placeholder="Buscar barbearia pelo nome" style="margin-top:10px" aria-label="Buscar barbearia pelo nome">
   <div id="lista" aria-live="polite"></div>
   <p id="msg" class="msg" hidden></p>
 </main>
@@ -74,10 +79,7 @@ async function carregarCidades(uf) {
   $cidade.disabled = true;
   if (!uf) return;
   try {
-    const r = await fetch(`https://servicodados.ibge.gov.br/api/v1/localidades/estados/${uf}/municipios?orderBy=nome`);
-    if (!r.ok) throw new Error();
-    const dados = await r.json();
-    dados.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')).forEach(c => $cidade.add(new Option(c.nome, c.nome)));
+    (await cidadesDoEstado(uf)).forEach(nome => $cidade.add(new Option(nome, nome)));
   } catch (e) {
     $msg.textContent = 'Não foi possível carregar as cidades. Escolha o estado de novo para tentar outra vez.'; $msg.hidden = false;
     return;
@@ -97,22 +99,27 @@ function estaAberta(horarios, agora) {
   return horarios.some(h => h.dia_semana === agora.dia && agora.min >= paraMin(h.abre) && agora.min < paraMin(h.fecha));
 }
 
+let carregarSeq = 0;
 async function carregar() {
-  const uf = $estado.value, cidade = $cidade.value;
-  $lista.innerHTML = ''; $msg.hidden = true;
+  const minhaSeq = ++carregarSeq;
+  const uf = $estado.value, cidade = $cidade.value, termo = $busca.value.trim();
+  $lista.innerHTML = '<p class="carregando">Carregando...</p>'; $msg.hidden = true;
 
   let q = db.from('barbearias_publicas').select('*');
   if (uf) q = q.eq('estado', uf); else q = q.in('estado', ativos);
   if (cidade) q = q.eq('cidade', cidade);
-  const { data, error } = await q.limit(100);
+  if (termo) q = q.ilike('nome', `%${termo}%`);
+  const { data, error } = await q.limit(termo ? 30 : 100);
+  if (minhaSeq !== carregarSeq) return; // uma busca mais nova já foi disparada
 
-  if (error) { $msg.textContent = 'Não foi possível carregar as barbearias. Tente novamente.'; $msg.hidden = false; return; }
+  if (error) { $lista.innerHTML = ''; $msg.textContent = 'Não foi possível carregar as barbearias. Tente novamente.'; $msg.hidden = false; return; }
   if (!data.length) {
-    if (uf || cidade) { $msg.textContent = 'Nenhuma barbearia encontrada nessa região.'; $msg.hidden = false; }
+    $lista.innerHTML = '';
+    if (uf || cidade || termo) { $msg.textContent = termo ? 'Nenhuma barbearia encontrada com esse nome.' : 'Nenhuma barbearia encontrada nessa região.'; $msg.hidden = false; }
     return;
   }
 
-  const lojas = embaralhar(data).slice(0, 20);
+  const lojas = termo ? data.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')) : embaralhar(data).slice(0, 20);
   const { data: hs } = await db.from('horarios_funcionamento').select('barbearia_id,dia_semana,abre,fecha').in('barbearia_id', lojas.map(l => l.id));
   const agora = agoraBrasil();
 
@@ -129,13 +136,16 @@ async function carregar() {
 
 $estado.addEventListener('change', async () => { await carregarCidades($estado.value); carregar(); });
 $cidade.addEventListener('change', carregar);
+let buscaT;
+$busca.addEventListener('input', () => { clearTimeout(buscaT); buscaT = setTimeout(carregar, 350); });
 (async () => {
   const { data: { session } } = await db.auth.getSession();
   const b = $('bLogin');
   if (session) {
     const { data: p } = await db.from('profiles').select('nome,role').eq('id', session.user.id).maybeSingle();
     if (p?.role === 'admin') $('atalhos').innerHTML = '<a class="atalho" href="admin.html">Painel admin</a>';
-    if (p?.role === 'dono') $('atalhos').innerHTML = '<a class="atalho" href="dono.html">Meu painel</a>';
+    else if (p?.role === 'dono') $('atalhos').innerHTML = '<a class="atalho" href="dono.html">Meu painel</a>';
+    else $('atalhos').innerHTML = '<a class="atalho" href="agendamentos.html">Meus agendamentos</a>';
     b.textContent = 'Sair' + (p?.nome ? ' (' + p.nome.split(' ')[0] + ')' : '');
     b.onclick = async () => { await db.auth.signOut(); location.reload(); };
   } else {

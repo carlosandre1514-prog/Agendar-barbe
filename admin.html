@@ -6,6 +6,8 @@
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#0A0C10">
 <title>Admin · Agenda Barba</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="manifest" href="manifest.json">
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;800&display=swap" rel="stylesheet">
 <style>
 :root{--bg:#0A0C10;--ink:#F1F5FA;--muted:#8E9AAB;--card:#12161D;--line:#242C38;--blue:#2F7BF0;--blue2:#1B4FA8;--red:#D42B35;--ok:#5FD08F;--no:#F08A8A}
@@ -70,6 +72,9 @@ form{display:grid;gap:10px}
     <input id="endereco" placeholder="Endereço" required>
     <select id="uf" required><option value="">Estado</option></select>
     <select id="cidade" required disabled><option value="">Cidade</option></select>
+    <input id="nomeDono" placeholder="Nome do dono" required>
+    <input id="emailDono" type="email" placeholder="E-mail do dono" autocomplete="off" required>
+    <input id="senhaDono" type="password" placeholder="Senha inicial do dono" autocomplete="new-password" required>
     <button class="pri" type="submit">Cadastrar barbearia</button>
     <div id="msgLoja" class="erro"></div>
   </form>
@@ -132,9 +137,16 @@ $('uf').addEventListener('change', async () => {
   c.innerHTML = '<option value="">Cidade</option>'; c.disabled = true;
   if (!uf) return;
   try {
-    const r = await fetch(`https://servicodados.ibge.gov.br/api/v1/localidades/estados/${uf}/municipios?orderBy=nome`);
-    if (!r.ok) throw new Error();
-    (await r.json()).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')).forEach(m => c.add(new Option(m.nome, m.nome)));
+    let lista;
+    const chave = 'cidades_' + uf;
+    try { const salvo = JSON.parse(localStorage.getItem(chave) || 'null'); if (salvo && Date.now() - salvo.quando < 30 * 24 * 60 * 60 * 1000) lista = salvo.lista; } catch (e) {}
+    if (!lista) {
+      const r = await fetch(`https://servicodados.ibge.gov.br/api/v1/localidades/estados/${uf}/municipios?orderBy=nome`);
+      if (!r.ok) throw new Error();
+      lista = (await r.json()).map(m => m.nome).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+      try { localStorage.setItem(chave, JSON.stringify({ quando: Date.now(), lista })); } catch (e) {}
+    }
+    lista.forEach(nome => c.add(new Option(nome, nome)));
     c.disabled = false;
   } catch (e) { $('msgLoja').textContent = 'Não foi possível carregar as cidades. Escolha o estado de novo.'; }
 });
@@ -142,12 +154,23 @@ $('uf').addEventListener('change', async () => {
 $('fLoja').addEventListener('submit', async e => {
   e.preventDefault();
   const m = $('msgLoja'); m.className = 'erro'; m.textContent = '';
-  const { error } = await db.from('barbearias').insert({
-    nome: $('nome').value.trim(), endereco: $('endereco').value.trim(), estado: $('uf').value, cidade: $('cidade').value
+  const btn = e.target.querySelector('button[type=submit]');
+  btn.disabled = true;
+  const { data, error } = await db.functions.invoke('criar-barbearia', {
+    body: {
+      nome: $('nome').value.trim(),
+      endereco: $('endereco').value.trim(),
+      estado: $('uf').value,
+      cidade: $('cidade').value,
+      nome_dono: $('nomeDono').value.trim(),
+      email: $('emailDono').value.trim(),
+      senha: $('senhaDono').value
+    }
   });
-  if (error) { m.textContent = 'Não foi possível cadastrar: ' + error.message; return; }
-  m.className = 'ok'; m.textContent = 'Barbearia cadastrada.';
-  $('nome').value = ''; $('endereco').value = '';
+  btn.disabled = false;
+  if (error || data?.erro) { m.textContent = 'Não foi possível cadastrar: ' + (data?.erro || error.message); return; }
+  m.className = 'ok'; m.textContent = 'Barbearia e conta do dono criadas.';
+  $('nome').value = ''; $('endereco').value = ''; $('nomeDono').value = ''; $('emailDono').value = ''; $('senhaDono').value = '';
   carregarLojas();
 });
 

@@ -10,6 +10,10 @@
 <section id="painel" hidden>
   <div class="row"><div><h1 id="nomeLoja"></h1><p class="muted" id="statusLoja"></p></div><button id="sair">Sair</button></div>
 
+  <h2>Resumo do mês</h2>
+  <div class="card row"><div><b id="rmQtd">–</b><div class="muted">agendamentos confirmados</div></div>
+  <div style="text-align:right"><b id="rmValor">–</b><div class="muted">faturamento previsto</div></div></div>
+
   <h2>Pedidos de agendamento</h2><div class="lista" id="agend"></div>
 
   <h2>Horário de funcionamento</h2>
@@ -38,7 +42,40 @@ async function iniciar() {
   loja = data; $('login').hidden = true; $('painel').hidden = false;
   $('nomeLoja').textContent = loja.nome;
   $('statusLoja').textContent = loja.ativa ? 'Barbearia ativa' : 'Barbearia suspensa pelo administrador';
-  agendamentos(); horarios(); servicos();
+  agendamentos(); horarios(); servicos(); resumoMes(); escutarNovosPedidos();
+}
+
+async function resumoMes() {
+  const agora = new Date();
+  const inicioMes = new Date(agora.getFullYear(), agora.getMonth(), 1).toISOString();
+  const { data } = await db.from('agendamentos').select('servicos(preco)').eq('barbearia_id', loja.id).eq('status', 'confirmado').gte('inicio', inicioMes);
+  const lista = data || [];
+  $('rmQtd').textContent = lista.length;
+  $('rmValor').textContent = reais(lista.reduce((s, a) => s + Number(a.servicos?.preco || 0), 0));
+}
+
+// Toca um bip curto e mostra um aviso quando chega um pedido novo, sem precisar recarregar a página.
+function bip() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.value = 880; o.connect(g); g.connect(ctx.destination);
+    g.gain.setValueAtTime(0.15, ctx.currentTime);
+    o.start(); o.stop(ctx.currentTime + 0.18);
+  } catch (e) {}
+}
+function escutarNovosPedidos() {
+  db.channel('pedidos-' + loja.id)
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'agendamentos', filter: `barbearia_id=eq.${loja.id}` }, () => {
+      bip(); avisar('Novo pedido de agendamento!'); agendamentos(); resumoMes();
+    }).subscribe();
+}
+
+function linkWhatsApp(telefone, texto) {
+  const digitos = String(telefone || '').replace(/\D/g, '');
+  if (!digitos) return '';
+  const num = digitos.length <= 11 ? '55' + digitos : digitos;
+  return `https://wa.me/${num}?text=${encodeURIComponent(texto)}`;
 }
 $('sair').onclick = async () => { await db.auth.signOut(); iniciar(); };
 
@@ -48,10 +85,12 @@ async function agendamentos() {
   const ids = [...new Set((data || []).map(a => a.cliente_id))];
   const { data: ps } = ids.length ? await db.from('profiles').select('id,nome,telefone').in('id', ids) : { data: [] };
   $('agend').innerHTML = (data || []).length ? data.map(a => { const c = (ps || []).find(p => p.id === a.cliente_id);
-    return `<div class="card"><div class="row"><div><b>${new Date(a.inicio).toLocaleString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</b>
+    const quando = new Date(a.inicio).toLocaleString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const zap = linkWhatsApp(c?.telefone, `Olá ${c?.nome || ''}! Sobre seu horário em ${loja.nome} no dia ${quando}: `);
+    return `<div class="card"><div class="row"><div><b>${quando}</b>
     <div class="muted">${esc(a.servicos?.nome)} · ${a.servicos?.duracao_min} min<br>${esc(c?.nome || 'Cliente')} ${esc(c?.telefone || '')}</div></div>
     <span class="tag ${a.status === 'confirmado' ? 'on' : ''}">${a.status === 'confirmado' ? 'Confirmado' : 'Pendente'}</span></div>
-    <p class="row" style="justify-content:flex-start">${a.status === 'pendente' ? `<button class="pri" data-a="${a.id}" data-s="confirmado">Confirmar</button>` : ''}<button data-a="${a.id}" data-s="cancelado">${a.status === 'pendente' ? 'Recusar' : 'Cancelar'}</button></p></div>`; }).join('')
+    <p class="row" style="justify-content:flex-start">${a.status === 'pendente' ? `<button class="pri" data-a="${a.id}" data-s="confirmado">Confirmar</button>` : ''}<button data-a="${a.id}" data-s="cancelado">${a.status === 'pendente' ? 'Recusar' : 'Cancelar'}</button>${zap ? `<a href="${zap}" target="_blank" rel="noopener">Avisar no WhatsApp</a>` : ''}</p></div>`; }).join('')
     : '<p class="muted">Nenhum pedido no momento.</p>';
 }
 $('agend').onclick = async e => { const b = e.target.closest('button[data-a]'); if (!b) return;

@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><meta name="theme-color" content="#0A0C10">
+<title>Redefinir senha · Agenda Barba</title>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;800&display=swap" rel="stylesheet">
+</head><body><div class="pole"></div>
+<main>
+<a href="index.html">← Início</a>
+<h1>Redefinir senha</h1>
+<p class="muted" id="intro">Só um instante, verificando o link...</p>
+<form class="card" id="f" hidden>
+  <input id="s1" type="password" placeholder="Nova senha (mínimo 6 caracteres)" minlength="6" autocomplete="new-password" required>
+  <input id="s2" type="password" placeholder="Confirme a nova senha" minlength="6" autocomplete="new-password" required>
+  <button class="pri" type="submit">Salvar nova senha</button>
+  <div id="r" class="erro"></div>
+</form>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="js/comum.js"></script>
+<script>
+(async () => {
+  const { data: { session } } = await db.auth.getSession();
+  if (!session) { $('intro').textContent = 'Este link já expirou ou é inválido. Peça um novo link na tela de entrar.'; return; }
+  $('intro').textContent = 'Escolha a nova senha da sua conta.';
+  $('f').hidden = false;
+})();
+$('f').onsubmit = async e => {
+  e.preventDefault();
+  const r = $('r'); r.className = 'erro'; r.textContent = '';
+  if ($('s1').value !== $('s2').value) { r.textContent = 'As senhas não são iguais.'; return; }
+  const { error } = await db.auth.updateUser({ password: $('s1').value });
+  if (error) { r.textContent = error.message; return; }
+  r.className = 'ok'; r.textContent = 'Senha alterada! Redirecionando...';
+  setTimeout(() => location.href = 'index.html', 1500);
+};
+</script>
+</body></html>
