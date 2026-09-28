@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><meta name="theme-color" content="#0A0C10">
+<title>Painel do dono · Agenda Barba</title>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;800&display=swap" rel="stylesheet">
+</head><body><div class="pole"></div>
+<main>
+<a href="index.html">← Início</a>
+<section id="login" hidden><h1>Painel da barbearia</h1><p class="muted">Entre com o e-mail e a senha que o administrador criou. Para trocar a senha, fale com ele.</p><div id="cx"></div></section>
+<section id="painel" hidden>
+  <div class="row"><div><h1 id="nomeLoja"></h1><p class="muted" id="statusLoja"></p></div><button id="sair">Sair</button></div>
+
+  <h2>Pedidos de agendamento</h2><div class="lista" id="agend"></div>
+
+  <h2>Horário de funcionamento</h2>
+  <form class="card" id="fh"><div id="hs" class="lista"></div><button class="pri" type="submit">Salvar horários</button><div id="rh" class="ok"></div></form>
+
+  <h2>Novo serviço</h2>
+  <form class="card" id="fs">
+    <input id="sn" placeholder="Nome do serviço" required>
+    <input id="sp" type="number" step="0.01" min="0" placeholder="Preço (R$)" required>
+    <input id="sd" type="number" min="5" step="5" placeholder="Duração em minutos" required>
+    <input id="si" type="url" placeholder="Link da foto (opcional)">
+    <button class="pri" type="submit">Adicionar serviço</button><div id="rs" class="erro"></div></form>
+  <h2>Meus serviços</h2><div class="lista" id="servs"></div>
+</section>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="js/comum.js"></script>
+<script>
+let loja, uid;
+async function iniciar() {
+  const { data: { session } } = await db.auth.getSession();
+  if (!session) { $('login').hidden = false; $('painel').hidden = true; caixaLogin($('cx'), iniciar, false); return; }
+  uid = session.user.id;
+  const { data } = await db.from('barbearias').select('*').eq('dono_id', uid).maybeSingle();
+  if (!data) { $('login').hidden = false; $('painel').hidden = true; await db.auth.signOut(); caixaLogin($('cx'), iniciar, false); $('cxR').textContent = 'Esta conta não está ligada a nenhuma barbearia.'; return; }
+  loja = data; $('login').hidden = true; $('painel').hidden = false;
+  $('nomeLoja').textContent = loja.nome;
+  $('statusLoja').textContent = loja.ativa ? 'Barbearia ativa' : 'Barbearia suspensa pelo administrador';
+  agendamentos(); horarios(); servicos();
+}
+$('sair').onclick = async () => { await db.auth.signOut(); iniciar(); };
+
+async function agendamentos() {
+  const { data } = await db.from('agendamentos').select('id,inicio,status,cliente_id,servicos(nome,duracao_min)').eq('barbearia_id', loja.id)
+    .in('status', ['pendente', 'confirmado']).gte('fim', new Date().toISOString()).order('inicio');
+  const ids = [...new Set((data || []).map(a => a.cliente_id))];
+  const { data: ps } = ids.length ? await db.from('profiles').select('id,nome,telefone').in('id', ids) : { data: [] };
+  $('agend').innerHTML = (data || []).length ? data.map(a => { const c = (ps || []).find(p => p.id === a.cliente_id);
+    return `<div class="card"><div class="row"><div><b>${new Date(a.inicio).toLocaleString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</b>
+    <div class="muted">${esc(a.servicos?.nome)} · ${a.servicos?.duracao_min} min<br>${esc(c?.nome || 'Cliente')} ${esc(c?.telefone || '')}</div></div>
+    <span class="tag ${a.status === 'confirmado' ? 'on' : ''}">${a.status === 'confirmado' ? 'Confirmado' : 'Pendente'}</span></div>
+    <p class="row" style="justify-content:flex-start">${a.status === 'pendente' ? `<button class="pri" data-a="${a.id}" data-s="confirmado">Confirmar</button>` : ''}<button data-a="${a.id}" data-s="cancelado">${a.status === 'pendente' ? 'Recusar' : 'Cancelar'}</button></p></div>`; }).join('')
+    : '<p class="muted">Nenhum pedido no momento.</p>';
+}
+$('agend').onclick = async e => { const b = e.target.closest('button[data-a]'); if (!b) return;
+  const { error } = await db.from('agendamentos').update({ status: b.dataset.s }).eq('id', b.dataset.a);
+  if (error) alert('Não foi possível atualizar: ' + error.message); agendamentos(); };
+
+async function horarios() {
+  const { data } = await db.from('horarios_funcionamento').select('*').eq('barbearia_id', loja.id);
+  $('hs').innerHTML = DIAS.map((d, i) => { const h = (data || []).find(x => x.dia_semana === i);
+    return `<div class="row"><span style="min-width:80px">${d}</span><input type="time" data-d="${i}" data-k="abre" value="${h ? String(h.abre).slice(0,5) : ''}"><input type="time" data-d="${i}" data-k="fecha" value="${h ? String(h.fecha).slice(0,5) : ''}"></div>`; }).join('');
+}
+$('fh').onsubmit = async e => { e.preventDefault();
+  const linhas = DIAS.map((_, i) => ({ barbearia_id: loja.id, dia_semana: i, abre: document.querySelector(`[data-d="${i}"][data-k="abre"]`).value, fecha: document.querySelector(`[data-d="${i}"][data-k="fecha"]`).value }))
+    .filter(l => l.abre && l.fecha);
+  await db.from('horarios_funcionamento').delete().eq('barbearia_id', loja.id);
+  const { error } = linhas.length ? await db.from('horarios_funcionamento').insert(linhas) : {};
+  $('rh').className = error ? 'erro' : 'ok'; $('rh').textContent = error ? error.message : 'Horários salvos. Deixe em branco os dias fechados.'; };
+
+async function servicos() {
+  const { data } = await db.from('servicos').select('*').eq('barbearia_id', loja.id).order('nome');
+  $('servs').innerHTML = (data || []).length ? data.map(s => `<div class="card row"><div><b>${esc(s.nome)}</b><div class="muted">${reais(s.preco)} · ${s.duracao_min} min</div></div>
+    <button data-id="${s.id}" data-ativo="${s.ativo}">${s.ativo ? 'Desativar' : 'Ativar'}</button></div>`).join('') : '<p class="muted">Nenhum serviço ainda.</p>';
+}
+$('servs').onclick = async e => { const b = e.target.closest('button[data-id]'); if (!b) return;
+  await db.from('servicos').update({ ativo: b.dataset.ativo !== 'true' }).eq('id', b.dataset.id); servicos(); };
+$('fs').onsubmit = async e => { e.preventDefault();
+  const { error } = await db.from('servicos').insert({ barbearia_id: loja.id, nome: $('sn').value.trim(), preco: +$('sp').value, duracao_min: +$('sd').value, imagem_url: $('si').value.trim() || null, ativo: true });
+  $('rs').className = error ? 'erro' : 'ok'; $('rs').textContent = error ? error.message : 'Serviço adicionado.';
+  if (!error) { $('fs').reset(); servicos(); } };
+iniciar();
+</script></body></html>

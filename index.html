@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="theme-color" content="#0A0C10">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agenda Barba</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+.sub{color:var(--muted);margin:0 0 24px}
+h1.grande{font-size:2.4rem;line-height:1}
+.barra{display:flex;justify-content:flex-end;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.barra a.atalho{padding:9px 16px;border-radius:10px;background:var(--blue);color:#fff;text-decoration:none;font-weight:600}
+.barra button{padding:9px 16px}
+#cxWrap{margin-bottom:18px}
+.filtros{display:grid;gap:10px;grid-template-columns:1fr 1fr}
+select{width:100%}
+select:disabled{opacity:.5}
+#lista{margin-top:22px;display:grid;gap:12px}
+a.loja{display:block;background:var(--card);border:1.5px solid var(--line);border-radius:12px;padding:16px;text-decoration:none;color:inherit}
+a.loja:hover{border-color:var(--blue)}
+.topo{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+.nome{font-weight:800;font-size:1.15rem}
+.end{color:var(--muted);margin-top:4px;font-size:.95rem}
+.nota{margin-top:8px;font-size:.9rem;color:var(--blue)}
+.badge{font-size:.8rem;font-weight:600;padding:4px 10px;border-radius:99px;white-space:nowrap}
+.aberta{background:#12271C;color:var(--ok)}
+.fechada{background:#2A1517;color:var(--no)}
+.msg{color:var(--muted);margin-top:22px}
+.rodape{margin-top:48px;text-align:center}
+</style>
+</head>
+<body>
+<div class="pole"></div>
+<main>
+  <div class="barra"><span id="atalhos"></span><button id="bLogin" type="button">Entrar / Criar conta</button></div>
+  <div id="cxWrap" hidden></div>
+  <h1 class="grande">Agenda Barba</h1>
+  <p class="sub">Encontre uma barbearia e agende seu horário.</p>
+  <div class="filtros">
+    <select id="estado" aria-label="Estado"><option value="">Estado</option></select>
+    <select id="cidade" aria-label="Cidade" disabled><option value="">Cidade</option></select>
+  </div>
+  <div id="lista" aria-live="polite"></div>
+  <p id="msg" class="msg" hidden></p>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="js/comum.js"></script>
+<script>
+
+const ESTADOS = {AC:'Acre',AL:'Alagoas',AP:'Amapá',AM:'Amazonas',BA:'Bahia',CE:'Ceará',DF:'Distrito Federal',ES:'Espírito Santo',GO:'Goiás',MA:'Maranhão',MT:'Mato Grosso',MS:'Mato Grosso do Sul',MG:'Minas Gerais',PA:'Pará',PB:'Paraíba',PR:'Paraná',PE:'Pernambuco',PI:'Piauí',RJ:'Rio de Janeiro',RN:'Rio Grande do Norte',RS:'Rio Grande do Sul',RO:'Rondônia',RR:'Roraima',SC:'Santa Catarina',SP:'São Paulo',SE:'Sergipe',TO:'Tocantins'};
+
+const $estado = document.getElementById('estado');
+const $cidade = document.getElementById('cidade');
+const $lista = document.getElementById('lista');
+const $msg = document.getElementById('msg');
+
+const embaralhar = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+
+let ativos = [];
+async function carregarEstados() {
+  const { data, error } = await db.from('estados_ativos').select('uf');
+  if (error) { $msg.textContent = 'Não foi possível carregar os estados. Tente novamente.'; $msg.hidden = false; }
+  ativos = (data || []).map(d => d.uf).filter(uf => ESTADOS[uf]).sort((a, b) => ESTADOS[a].localeCompare(ESTADOS[b], 'pt-BR'));
+  ativos.forEach(uf => $estado.add(new Option(ESTADOS[uf], uf)));
+  if (!ativos.length) { $estado.options[0].text = 'Nenhum estado disponível'; $estado.disabled = true; }
+}
+
+async function carregarCidades(uf) {
+  $cidade.innerHTML = '<option value="">Cidade</option>';
+  $cidade.disabled = true;
+  if (!uf) return;
+  try {
+    const r = await fetch(`https://servicodados.ibge.gov.br/api/v1/localidades/estados/${uf}/municipios?orderBy=nome`);
+    if (!r.ok) throw new Error();
+    const dados = await r.json();
+    dados.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')).forEach(c => $cidade.add(new Option(c.nome, c.nome)));
+  } catch (e) {
+    $msg.textContent = 'Não foi possível carregar as cidades. Escolha o estado de novo para tentar outra vez.'; $msg.hidden = false;
+    return;
+  }
+  $cidade.disabled = false;
+}
+
+function agoraBrasil() {
+  const p = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Sao_Paulo', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date());
+  const g = t => p.find(x => x.type === t).value;
+  const dia = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].indexOf(g('weekday'));
+  return { dia, min: (Number(g('hour')) % 24) * 60 + Number(g('minute')) };
+}
+const paraMin = t => { const [h, m] = String(t).split(':'); return Number(h) * 60 + Number(m); };
+
+function estaAberta(horarios, agora) {
+  return horarios.some(h => h.dia_semana === agora.dia && agora.min >= paraMin(h.abre) && agora.min < paraMin(h.fecha));
+}
+
+async function carregar() {
+  const uf = $estado.value, cidade = $cidade.value;
+  $lista.innerHTML = ''; $msg.hidden = true;
+
+  let q = db.from('barbearias_publicas').select('*');
+  if (uf) q = q.eq('estado', uf); else q = q.in('estado', ativos);
+  if (cidade) q = q.eq('cidade', cidade);
+  const { data, error } = await q.limit(100);
+
+  if (error) { $msg.textContent = 'Não foi possível carregar as barbearias. Tente novamente.'; $msg.hidden = false; return; }
+  if (!data.length) {
+    if (uf || cidade) { $msg.textContent = 'Nenhuma barbearia encontrada nessa região.'; $msg.hidden = false; }
+    return;
+  }
+
+  const lojas = embaralhar(data).slice(0, 20);
+  const { data: hs } = await db.from('horarios_funcionamento').select('barbearia_id,dia_semana,abre,fecha').in('barbearia_id', lojas.map(l => l.id));
+  const agora = agoraBrasil();
+
+  $lista.innerHTML = lojas.map(l => {
+    const aberta = estaAberta((hs || []).filter(h => h.barbearia_id === l.id), agora);
+    const nota = Number(l.total_avaliacoes) > 0 ? `★ ${l.nota_media} (${l.total_avaliacoes})` : 'Sem avaliações';
+    return `<a class="loja" href="loja.html?id=${encodeURIComponent(l.id)}">
+      <div class="topo"><span class="nome">${esc(l.nome)}</span>
+      <span class="badge ${aberta ? 'aberta' : 'fechada'}">${aberta ? 'Aberta' : 'Fechada'}</span></div>
+      <div class="end">${esc(l.endereco)}</div>
+      <div class="nota">${nota}</div></a>`;
+  }).join('');
+}
+
+$estado.addEventListener('change', async () => { await carregarCidades($estado.value); carregar(); });
+$cidade.addEventListener('change', carregar);
+(async () => {
+  const { data: { session } } = await db.auth.getSession();
+  const b = $('bLogin');
+  if (session) {
+    const { data: p } = await db.from('profiles').select('nome,role').eq('id', session.user.id).maybeSingle();
+    if (p?.role === 'admin') $('atalhos').innerHTML = '<a class="atalho" href="admin.html">Painel admin</a>';
+    if (p?.role === 'dono') $('atalhos').innerHTML = '<a class="atalho" href="dono.html">Meu painel</a>';
+    b.textContent = 'Sair' + (p?.nome ? ' (' + p.nome.split(' ')[0] + ')' : '');
+    b.onclick = async () => { await db.auth.signOut(); location.reload(); };
+  } else {
+    b.onclick = () => { const w = $('cxWrap'); w.hidden = !w.hidden; if (!w.hidden) caixaLogin(w, () => location.reload()); };
+  }
+})();
+carregarEstados().then(() => { if (ativos.length) carregar(); });
+</script>
+</body>
+</html>

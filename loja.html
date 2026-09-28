@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#0A0C10">
+<title>Barbearia · Agenda Barba</title>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;800&display=swap" rel="stylesheet">
+</head><body><div class="pole"></div>
+<main>
+<a href="index.html">← Voltar</a>
+<div id="topo" style="margin-top:14px"></div>
+<h2>Serviços</h2><div class="lista" id="servicos"></div>
+
+<h2>Agendar</h2>
+<div id="passo"></div>
+
+<h2>Avaliar</h2><div id="aval"></div>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="js/comum.js"></script>
+<script>
+const id = new URLSearchParams(location.search).get('id');
+let loja, servs = [], hors = [], escolha = {};
+const passo = $('passo');
+
+(async () => {
+  const { data } = await db.from('barbearias_publicas').select('*').eq('id', id).maybeSingle();
+  if (!data) { $('topo').innerHTML = '<h1>Barbearia não encontrada</h1>'; return; }
+  loja = data; document.title = loja.nome + ' · Agenda Barba';
+  $('topo').innerHTML = `<h1>${esc(loja.nome)}</h1><p class="muted">${esc(loja.endereco)}<br>${esc(loja.cidade)} - ${esc(loja.estado)}</p>
+    <p>${Number(loja.total_avaliacoes) ? '★ ' + loja.nota_media + ' (' + loja.total_avaliacoes + ' avaliações)' : 'Sem avaliações ainda'}</p>`;
+  const [s, h] = await Promise.all([
+    db.from('servicos').select('*').eq('barbearia_id', id).eq('ativo', true).order('nome'),
+    db.from('horarios_funcionamento').select('*').eq('barbearia_id', id)]);
+  servs = s.data || []; hors = h.data || [];
+  $('servicos').innerHTML = servs.length ? servs.map(v => `<div class="card row">
+    <div class="row" style="justify-content:flex-start">${v.imagem_url ? `<img src="${esc(v.imagem_url)}" alt="" width="56" height="56" style="border-radius:8px;object-fit:cover">` : ''}
+    <div><b>${esc(v.nome)}</b><div class="muted">${v.duracao_min} min</div></div></div><b>${reais(v.preco)}</b></div>`).join('')
+    : '<p class="muted">Esta barbearia ainda não cadastrou serviços.</p>';
+  passo1(); montarAval();
+})();
+
+// PASSO 1: dia e horário
+function passo1() {
+  if (!servs.length || !hors.length) { passo.innerHTML = '<p class="muted">Agendamento indisponível: faltam serviços ou horários de funcionamento.</p>'; return; }
+  const dias = [...Array(7)].map((_, i) => { const d = new Date(); d.setDate(d.getDate() + i); d.setHours(0,0,0,0); return d; });
+  passo.innerHTML = `<b>1. Escolha o dia e o horário</b><div class="grade" id="dias" style="margin:10px 0"></div><div class="grade" id="slots"></div>`;
+  $('dias').innerHTML = dias.map((d, i) => `<button data-i="${i}">${i === 0 ? 'Hoje' : DIAS[d.getDay()].slice(0,3) + ' ' + d.getDate()}</button>`).join('');
+  $('dias').onclick = e => { const b = e.target.closest('button'); if (!b) return;
+    [...$('dias').children].forEach(x => x.classList.remove('sel')); b.classList.add('sel'); listarSlots(dias[b.dataset.i]); };
+}
+const min = t => { const [h, m] = String(t).split(':'); return +h * 60 + +m; };
+async function listarSlots(dia) {
+  const doDia = hors.filter(h => h.dia_semana === dia.getDay());
+  const fim = new Date(dia); fim.setDate(fim.getDate() + 1);
+  const { data } = await db.rpc('horarios_ocupados', { p_barbearia: id, p_de: dia.toISOString(), p_ate: fim.toISOString() });
+  const ocup = (data || []).map(o => [new Date(o.inicio), new Date(o.fim)]);
+  const slots = [];
+  doDia.forEach(h => { for (let m = min(h.abre); m + 30 <= min(h.fecha); m += 30) {
+    const ini = new Date(dia); ini.setMinutes(m);
+    const fimS = new Date(ini.getTime() + 30 * 60000);
+    if (ini > new Date() && !ocup.some(([a, b]) => ini < b && fimS > a)) slots.push(ini); } });
+  $('slots').innerHTML = slots.length ? slots.map(s => `<button data-t="${s.toISOString()}">${s.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</button>`).join('')
+    : '<p class="muted">Sem horários livres neste dia.</p>';
+  $('slots').onclick = e => { const b = e.target.closest('button'); if (b) { escolha.inicio = b.dataset.t; passo2(); } };
+}
+
+// PASSO 2: serviço
+function passo2() {
+  passo.innerHTML = `<b>2. Escolha o serviço</b><p class="muted">${new Date(escolha.inicio).toLocaleString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</p>
+    <div class="lista">${servs.map(v => `<button data-s="${v.id}" style="text-align:left" class="row"><span>${esc(v.nome)} · ${v.duracao_min} min</span><b>${reais(v.preco)}</b></button>`).join('')}</div>
+    <p><button id="volta">Trocar horário</button></p>`;
+  $('volta').onclick = passo1;
+  passo.querySelector('.lista').onclick = e => { const b = e.target.closest('button'); if (b) { escolha.servico = servs.find(v => v.id === b.dataset.s); passo3(); } };
+}
+
+// PASSO 3: confirmar (exige login)
+async function passo3() {
+  const { data: { session } } = await db.auth.getSession();
+  if (!session) { passo.innerHTML = '<b>3. Entre para confirmar</b><div id="lg" style="margin-top:10px"></div>'; caixaLogin($('lg'), passo3); return; }
+  const { data: p } = await db.from('profiles').select('nome,telefone').eq('id', session.user.id).maybeSingle();
+  passo.innerHTML = `<b>3. Confirme seus dados</b><form class="card" id="fc" style="margin-top:10px">
+    <div>${esc(escolha.servico.nome)} · ${escolha.servico.duracao_min} min · ${reais(escolha.servico.preco)}<br><span class="muted">${new Date(escolha.inicio).toLocaleString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span></div>
+    <input id="cn" value="${esc(p?.nome)}" placeholder="Nome" required><input id="ct" value="${esc(p?.telefone)}" placeholder="Telefone" required>
+    <button class="pri" type="submit">Confirmar agendamento</button><button type="button" id="v2">Voltar</button><div id="re" class="erro"></div></form>`;
+  $('v2').onclick = passo2;
+  $('fc').onsubmit = async e => {
+    e.preventDefault();
+    await db.from('profiles').update({ nome: $('cn').value.trim(), telefone: $('ct').value.trim() }).eq('id', session.user.id);
+    const { error } = await db.from('agendamentos').insert({ barbearia_id: id, servico_id: escolha.servico.id, inicio: escolha.inicio });
+    if (error) { $('re').textContent = /sem_conflito|conflict|exclus/i.test(error.message) ? 'Esse horário acabou de ser ocupado. Escolha outro.' : error.message; return; }
+    passo.innerHTML = '<div class="card"><b class="ok">Pedido enviado!</b><p>A barbearia vai confirmar o seu horário. Se ela recusar, o horário volta a ficar livre.</p><button id="novo">Fazer outro agendamento</button></div>';
+    $('novo').onclick = passo1; escolha = {};
+  };
+}
+
+// Avaliação
+async function montarAval() {
+  const { data: { session } } = await db.auth.getSession();
+  if (!session) { $('aval').innerHTML = '<p class="muted">Entre com a sua conta para avaliar. Só quem teve um agendamento confirmado pode avaliar.</p>'; return; }
+  $('aval').innerHTML = `<form class="card" id="fa"><select id="nota">${[5,4,3,2,1].map(n => `<option value="${n}">${'★'.repeat(n)} (${n})</option>`).join('')}</select>
+    <button class="pri" type="submit">Enviar avaliação</button><div id="ra" class="erro"></div></form>`;
+  $('fa').onsubmit = async e => { e.preventDefault();
+    const { error } = await db.from('avaliacoes').insert({ barbearia_id: id, cliente_id: session.user.id, nota: +$('nota').value });
+    $('ra').className = error ? 'erro' : 'ok';
+    $('ra').textContent = error ? 'Só é possível avaliar com um agendamento confirmado, uma vez por barbearia.' : 'Obrigado pela avaliação!'; };
+}
+</script></body></html>

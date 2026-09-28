@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#0A0C10">
+<title>Admin · Agenda Barba</title>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0A0C10;--ink:#F1F5FA;--muted:#8E9AAB;--card:#12161D;--line:#242C38;--blue:#2F7BF0;--blue2:#1B4FA8;--red:#D42B35;--ok:#5FD08F;--no:#F08A8A}
+*{box-sizing:border-box}
+body{margin:0;font-family:'Bricolage Grotesque',system-ui,sans-serif;background:var(--bg);color:var(--ink);min-height:100vh}
+.pole{height:10px;background:repeating-linear-gradient(-45deg,var(--red) 0 14px,#fff 14px 28px,var(--blue) 28px 42px,#fff 42px 56px)}
+main{max-width:640px;margin:0 auto;padding:24px 18px 60px}
+h1{font-size:1.8rem;font-weight:800;letter-spacing:-.03em;margin:0 0 4px}
+h2{font-size:1.2rem;margin:32px 0 12px}
+.muted{color:var(--muted)}
+input,select,button{font:inherit;color:var(--ink);border-radius:10px;border:1.5px solid var(--line);background:var(--card);padding:13px 12px;width:100%}
+input:focus-visible,select:focus-visible,button:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
+select{color-scheme:dark}
+button{cursor:pointer;font-weight:600;width:auto}
+button.pri{background:var(--blue);border-color:var(--blue);color:#fff}
+form{display:grid;gap:10px}
+.card{background:var(--card);border:1.5px solid var(--line);border-radius:12px;padding:14px}
+.row{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.estados{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.est{display:flex;align-items:center;gap:10px;background:var(--card);border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;width:100%;text-align:left}
+.est.on{border-color:var(--blue);background:#0F1B30}
+.est b{min-width:26px}
+.lojas{display:grid;gap:10px}
+.tag{font-size:.8rem;font-weight:600;padding:4px 10px;border-radius:99px}
+.tag.on{background:#12271C;color:var(--ok)}
+.tag.off{background:#2A1517;color:var(--no)}
+.erro{color:var(--no);min-height:1.2em}
+.ok{color:var(--ok)}
+.top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div class="pole"></div>
+<main>
+<a href="index.html">← Início</a>
+
+<section id="login" hidden>
+  <h1>Painel admin</h1>
+  <p class="muted">Entre com a sua conta de administrador.</p>
+  <form id="fLogin">
+    <input id="email" type="email" placeholder="E-mail" autocomplete="username" required>
+    <input id="senha" type="password" placeholder="Senha" autocomplete="current-password" required>
+    <button class="pri" type="submit">Entrar</button>
+    <div id="erroLogin" class="erro"></div>
+  </form>
+</section>
+
+<section id="painel" hidden>
+  <div class="top">
+    <div><h1>Painel admin</h1><p class="muted" id="quem"></p></div>
+    <button id="sair" type="button">Sair</button>
+  </div>
+
+  <h2>Estados no site</h2>
+  <p class="muted">Toque para liberar ou esconder um estado no filtro da tela inicial.</p>
+  <div class="estados" id="estados"></div>
+
+  <h2>Nova barbearia</h2>
+  <form id="fLoja" class="card">
+    <input id="nome" placeholder="Nome da barbearia" required>
+    <input id="endereco" placeholder="Endereço" required>
+    <select id="uf" required><option value="">Estado</option></select>
+    <select id="cidade" required disabled><option value="">Cidade</option></select>
+    <button class="pri" type="submit">Cadastrar barbearia</button>
+    <div id="msgLoja" class="erro"></div>
+  </form>
+
+  <h2>Barbearias</h2>
+  <div class="lojas" id="lojas"></div>
+</section>
+
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script>
+const db = supabase.createClient('https://tnjyyxqvxygxgochayam.supabase.co', 'sb_publishable_93Ep4nz3AS1pjtuy2PeVXA_GI8mcvoK');
+const ESTADOS = {AC:'Acre',AL:'Alagoas',AP:'Amapá',AM:'Amazonas',BA:'Bahia',CE:'Ceará',DF:'Distrito Federal',ES:'Espírito Santo',GO:'Goiás',MA:'Maranhão',MT:'Mato Grosso',MS:'Mato Grosso do Sul',MG:'Minas Gerais',PA:'Pará',PB:'Paraíba',PR:'Paraná',PE:'Pernambuco',PI:'Piauí',RJ:'Rio de Janeiro',RN:'Rio Grande do Norte',RS:'Rio Grande do Sul',RO:'Rondônia',RR:'Roraima',SC:'Santa Catarina',SP:'São Paulo',SE:'Sergipe',TO:'Tocantins'};
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let ativos = new Set();
+
+async function iniciar() {
+  const { data: { session } } = await db.auth.getSession();
+  if (!session) return mostrar(false);
+  const { data: perfil } = await db.from('profiles').select('role').eq('id', session.user.id).single();
+  if (!perfil || perfil.role !== 'admin') {
+    await db.auth.signOut();
+    $('erroLogin').textContent = 'Essa conta não é de administrador.';
+    return mostrar(false);
+  }
+  $('quem').textContent = session.user.email;
+  mostrar(true);
+  await Promise.all([carregarEstados(), carregarLojas()]);
+}
+function mostrar(logado) { $('login').hidden = logado; $('painel').hidden = !logado; }
+
+$('fLogin').addEventListener('submit', async e => {
+  e.preventDefault();
+  $('erroLogin').textContent = '';
+  const { error } = await db.auth.signInWithPassword({ email: $('email').value.trim(), password: $('senha').value });
+  if (error) { $('erroLogin').textContent = 'E-mail ou senha incorretos.'; return; }
+  iniciar();
+});
+$('sair').addEventListener('click', async () => { await db.auth.signOut(); $('senha').value = ''; mostrar(false); });
+
+async function carregarEstados() {
+  const { data } = await db.from('estados_ativos').select('uf');
+  ativos = new Set((data || []).map(d => d.uf));
+  $('estados').innerHTML = Object.entries(ESTADOS).map(([uf, nome]) =>
+    `<button type="button" class="est ${ativos.has(uf) ? 'on' : ''}" data-uf="${uf}" aria-pressed="${ativos.has(uf)}"><b>${uf}</b><span>${nome}</span></button>`).join('');
+}
+$('estados').addEventListener('click', async e => {
+  const b = e.target.closest('.est'); if (!b) return;
+  const uf = b.dataset.uf;
+  const r = ativos.has(uf) ? await db.from('estados_ativos').delete().eq('uf', uf) : await db.from('estados_ativos').insert({ uf });
+  if (r.error) { alert('Não foi possível salvar. Tente de novo.'); return; }
+  carregarEstados();
+});
+
+Object.entries(ESTADOS).forEach(([uf, nome]) => $('uf').add(new Option(nome, uf)));
+$('uf').addEventListener('change', async () => {
+  const uf = $('uf').value, c = $('cidade');
+  c.innerHTML = '<option value="">Cidade</option>'; c.disabled = true;
+  if (!uf) return;
+  try {
+    const r = await fetch(`https://servicodados.ibge.gov.br/api/v1/localidades/estados/${uf}/municipios?orderBy=nome`);
+    if (!r.ok) throw new Error();
+    (await r.json()).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')).forEach(m => c.add(new Option(m.nome, m.nome)));
+    c.disabled = false;
+  } catch (e) { $('msgLoja').textContent = 'Não foi possível carregar as cidades. Escolha o estado de novo.'; }
+});
+
+$('fLoja').addEventListener('submit', async e => {
+  e.preventDefault();
+  const m = $('msgLoja'); m.className = 'erro'; m.textContent = '';
+  const { error } = await db.from('barbearias').insert({
+    nome: $('nome').value.trim(), endereco: $('endereco').value.trim(), estado: $('uf').value, cidade: $('cidade').value
+  });
+  if (error) { m.textContent = 'Não foi possível cadastrar: ' + error.message; return; }
+  m.className = 'ok'; m.textContent = 'Barbearia cadastrada.';
+  $('nome').value = ''; $('endereco').value = '';
+  carregarLojas();
+});
+
+async function carregarLojas() {
+  const { data, error } = await db.from('barbearias').select('id,nome,endereco,estado,cidade,ativa').order('nome');
+  if (error) { $('lojas').innerHTML = '<p class="erro">Não foi possível carregar as barbearias.</p>'; return; }
+  if (!data.length) { $('lojas').innerHTML = '<p class="muted">Nenhuma barbearia cadastrada ainda.</p>'; return; }
+  $('lojas').innerHTML = data.map(l => `<div class="card"><div class="row">
+    <div><b>${esc(l.nome)}</b><div class="muted">${esc(l.endereco)}<br>${esc(l.cidade)} - ${esc(l.estado)}</div></div>
+    <div style="text-align:right"><span class="tag ${l.ativa ? 'on' : 'off'}">${l.ativa ? 'Ativa' : 'Suspensa'}</span><br><br>
+    <button type="button" data-id="${l.id}" data-ativa="${l.ativa}">${l.ativa ? 'Suspender' : 'Ativar'}</button></div></div></div>`).join('');
+}
+$('lojas').addEventListener('click', async e => {
+  const b = e.target.closest('button[data-id]'); if (!b) return;
+  const { error } = await db.from('barbearias').update({ ativa: b.dataset.ativa !== 'true' }).eq('id', b.dataset.id);
+  if (error) { alert('Não foi possível alterar. Tente de novo.'); return; }
+  carregarLojas();
+});
+
+iniciar();
+</script>
+</body>
+</html>
